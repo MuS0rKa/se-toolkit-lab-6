@@ -68,3 +68,36 @@ The system prompt instructs the LLM to:
     {"tool": "read_file", "args": {"path": "wiki/git-workflow.md"}, "result": "..."}
   ]
 }
+
+## Task 3: System Agent Implementation
+
+### Overview
+For Task 3, I extended the documentation agent from Task 2 with system-level capabilities by adding a `query_api` tool. This allows the agent to interact with the live backend service, enabling it to answer questions about real-time data and API behavior.
+
+### New Tool: `query_api`
+The `query_api` tool is a function-calling interface to the deployed backend API. It accepts three parameters:
+- `method`: HTTP method (GET, POST)
+- `path`: API endpoint path (e.g., `/items/`, `/analytics/completion-rate?lab=lab-99`)
+- `body`: Optional JSON request body for POST requests
+
+The tool authenticates using the `LMS_API_KEY` from `.env.docker.secret` and sends requests to the base URL specified in `AGENT_API_BASE_URL` (defaults to `http://localhost:42002`). The response is returned as a JSON string containing `status_code` and `body`.
+
+### Tool Schema
+The tool is registered with the LLM using the following schema:
+```json
+{
+    "type": "function",
+    "function": {
+        "name": "query_api",
+        "description": "Make a request to the backend API. Use this for questions about live data (item count, scores, status codes).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "method": {"type": "string", "enum": ["GET", "POST"]},
+                "path": {"type": "string"},
+                "body": {"type": "string"}
+            },
+            "required": ["method", "path"]
+        }
+    }
+}
