@@ -13,8 +13,8 @@ import argparse
 from pathlib import Path
 
 # Load environment variables from both secret files
-load_dotenv(".env.agent.secret")
-load_dotenv(".env.docker.secret")
+load_dotenv(".env.agent.secret", override=False)
+load_dotenv(".env.docker.secret", override=False)
 
 # Constants
 MAX_TOOL_CALLS = 10
