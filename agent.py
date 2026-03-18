@@ -230,13 +230,14 @@ DECISION GUIDE:
 - "Status code without auth?" -> query_api GET /items/ without key
 - "What framework?" -> read_file backend/app/main.py or backend/requirements.txt
 - "List router modules?" -> list_files "backend/app/routers"
-- "Bug in /analytics/...?" -> query_api first, then read_file backend/app/routers/analytics.py, look for division by zero and None-unsafe calls like sorted()
-- "What error does endpoint return?" -> query_api first, then read_file the relevant router
+- "Bug in /analytics/completion-rate?" -> query_api GET /analytics/completion-rate?lab=lab-99, then read_file backend/app/routers/analytics.py — the bug is division by zero: (passed_learners / total_learners) when total_learners is 0
+- "Bug in /analytics/top-learners?" -> query_api GET /analytics/top-learners?lab=lab-99, then read_file backend/app/routers/analytics.py — the bug is sorted() with None avg_score causing TypeError
+- "Which operations in analytics.py are risky?" -> read_file backend/app/routers/analytics.py, identify: (1) division by zero in completion-rate, (2) sorted() with None values in top-learners
 - "Explain request journey / how does HTTP request travel?" -> read_file docker-compose.yml, then read_file caddy/Caddyfile, then read_file backend/Dockerfile, then read_file backend/app/main.py
-- "Docker wiki / docker cleanup?" -> list_files "wiki", find docker-related file, read_file it
-- "Branch protection on GitHub?" -> list_files "wiki", find github-related file, read_file it
+- "Docker wiki / docker cleanup?" -> read_file wiki/docker.md
+- "Branch protection on GitHub?" -> read_file wiki/github.md
 - "ETL idempotency / pipeline?" -> list_files "backend/app", find etl file, read_file it
-- "Compare ETL vs API error handling?" -> read_file ETL file AND read_file backend/app/routers/analytics.py, then compare
+- "Compare ETL vs API error handling?" -> read_file backend/app/etl.py AND read_file backend/app/routers/analytics.py, then compare error handling
 
 IMPORTANT: always end your answer with:
 Source: <path>   (e.g. Source: wiki/github.md  or  Source: backend/app/routers/items.py  or  Source: api)"""
