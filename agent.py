@@ -15,11 +15,6 @@ from pathlib import Path
 # Load environment variables
 load_dotenv(".env.agent.secret")
 
-# Load environment variables
-load_dotenv(".env.agent.secret")
-# Also load docker secrets for LMS_API_KEY
-load_dotenv(".env.docker.secret")
-
 # Constants
 MAX_TOOL_CALLS = 10
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -84,30 +79,6 @@ def list_files(path):
     except Exception as e:
         return f"Error listing directory: {e}"
 
-def query_api(method, path, body=None):
-    """Make a request to the backend API."""
-    base_url = os.getenv("AGENT_API_BASE_URL", "http://localhost:42002")
-    api_key = os.getenv("LMS_API_KEY")
-
-    if not api_key:
-        return json.dumps({"error": "LMS_API_KEY not set"})
-
-    full_url = f"{base_url.rstrip('/')}/{path.lstrip('/')}"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-
-    try:
-        if method.upper() == "GET":
-            response = requests.get(full_url, headers=headers, timeout=10)
-        elif method.upper() == "POST":
-            json_body = json.loads(body) if body else {}
-            response = requests.post(full_url, headers=headers, json=json_body, timeout=10)
-        else:
-            return json.dumps({"error": f"Unsupported method: {method}"})
-
-        result = {"status_code": response.status_code, "body": response.text}
-        return json.dumps(result)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
 
 # Tool definitions for function calling
 TOOLS = [
@@ -131,22 +102,6 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "query_api",
-            "description": "Make a request to the backend API. Use this for questions about live data (item count, scores, status codes).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "method": {"type": "string", "enum": ["GET", "POST"], "description": "HTTP method"},
-                    "path": {"type": "string", "description": "API path, e.g., '/items/'"},
-                    "body": {"type": "string", "description": "Optional JSON body for POST"}
-                },
-                "required": ["method", "path"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "list_files",
             "description": "List files and directories at a given path. Use this first to discover what wiki files are available.",
             "parameters": {
@@ -164,9 +119,9 @@ TOOLS = [
 ]
 
 SYSTEM_PROMPT = """You are a documentation assistant with access to the project wiki files.
-You have three tools: list_files, read_file, and query_api.
-- Use list_files and read_file for questions about documentation, code, or configuration.
-- Use query_api for questions that require live data from the backend (e.g., "How many items are in the database?") or to check API behavior (e.g., "What status code if no auth?").
+You have two tools:
+- list_files: Discover what files are in a directory
+- read_file: Read the contents of a file
 
 Follow this process:
 1. First, use list_files on the 'wiki' directory to see what documentation is available
@@ -213,8 +168,6 @@ def execute_tool_call(tool_call):
         result = read_file(arguments["path"])
     elif function_name == "list_files":
         result = list_files(arguments["path"])
-    elif function_name == "query_api":
-        result = query_api(arguments.get("method"), arguments.get("path"), arguments.get("body"))
     else:
         result = f"Error: Unknown tool {function_name}"
 
