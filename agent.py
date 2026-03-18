@@ -226,11 +226,17 @@ TOOLS:
    - Put query params in the path: e.g. "/analytics/completion-rate?lab=lab-99".
 
 DECISION GUIDE:
-- "How many items in the database?" -> query_api GET /items/
+- "How many items/learners in the database?" -> query_api GET /items/ or /learners/
 - "Status code without auth?" -> query_api GET /items/ without key
 - "What framework?" -> read_file backend/app/main.py or backend/requirements.txt
-- "List router modules and domains?" -> list_files "backend/app/routers", then answer using the known list above
-- "Bug in /analytics/...?" -> query_api first, then read_file the router source
+- "List router modules?" -> list_files "backend/app/routers"
+- "Bug in /analytics/...?" -> query_api first, then read_file backend/app/routers/analytics.py, look for division by zero and None-unsafe calls like sorted()
+- "What error does endpoint return?" -> query_api first, then read_file the relevant router
+- "Explain request journey / how does HTTP request travel?" -> read_file docker-compose.yml, then read_file caddy/Caddyfile, then read_file backend/Dockerfile, then read_file backend/app/main.py
+- "Docker wiki / docker cleanup?" -> list_files "wiki", find docker-related file, read_file it
+- "Branch protection on GitHub?" -> list_files "wiki", find github-related file, read_file it
+- "ETL idempotency / pipeline?" -> list_files "backend/app", find etl file, read_file it
+- "Compare ETL vs API error handling?" -> read_file ETL file AND read_file backend/app/routers/analytics.py, then compare
 
 IMPORTANT: always end your answer with:
 Source: <path>   (e.g. Source: wiki/github.md  or  Source: backend/app/routers/items.py  or  Source: api)"""
@@ -288,7 +294,10 @@ def call_llm(messages, tools=None):
 
     try:
         response = requests.post(
-            f"{api_base}/chat/completions", headers=headers, json=payload, timeout=60
+            f"{api_base.rstrip('/')}/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=60,
         )
         response.raise_for_status()
         return response.json()
