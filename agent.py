@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
 """
-Agent CLI with tools (read_file, list_files) and agentic loop.
+Agent CLI with tools (read_file, list_files, query_api) and agentic loop.
 """
 
 import os
 import sys
 import json
+import re
 import requests
 from dotenv import load_dotenv
 import argparse
-import glob
 from pathlib import Path
 
-# Load environment variables
+# Load environment variables from both secret files
 load_dotenv(".env.agent.secret")
+load_dotenv(".env.docker.secret")
 
 # Constants
 MAX_TOOL_CALLS = 10
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+AGENT_API_BASE_URL = os.getenv("AGENT_API_BASE_URL", "http://localhost:42002")
 
 
 def debug_log(message):
@@ -31,14 +33,10 @@ def validate_path(path):
     Returns absolute path if valid, None if invalid.
     """
     try:
-        # Convert to absolute path
         requested_path = os.path.abspath(os.path.join(PROJECT_ROOT, path))
-
-        # Check if path is within project root
         if not requested_path.startswith(PROJECT_ROOT):
             debug_log(f"Security: Path traversal attempt blocked: {path}")
             return None
-
         return requested_path
     except Exception as e:
         debug_log(f"Path validation error: {e}")
@@ -70,7 +68,6 @@ def list_files(path):
     try:
         if not os.path.exists(valid_path):
             return f"Error: Path not found: {path}"
-
         if not os.path.isdir(valid_path):
             return f"Error: Path is not a directory: {path}"
 
@@ -80,19 +77,62 @@ def list_files(path):
         return f"Error listing directory: {e}"
 
 
+def query_api(method, path, body=None):
+    """
+    Send an HTTP request to the deployed backend API.
+    Returns JSON string with status_code and body.
+    """
+    api_key = os.getenv("LMS_API_KEY")
+    base_url = AGENT_API_BASE_URL.rstrip("/")
+    url = base_url + path
+
+    headers = {
+        "Content-Type": "application/json",
+    }
+    if api_key:
+        headers["X-API-Key"] = api_key
+
+    try:
+        kwargs = {"headers": headers, "timeout": 30}
+        if body:
+            kwargs["data"] = body if isinstance(body, str) else json.dumps(body)
+
+        response = requests.request(method.upper(), url, **kwargs)
+        try:
+            response_body = response.json()
+        except Exception:
+            response_body = response.text
+
+        result = {
+            "status_code": response.status_code,
+            "body": response_body,
+        }
+        return json.dumps(result)
+
+    except requests.exceptions.ConnectionError as e:
+        return json.dumps({"status_code": 0, "body": f"Connection error: {e}"})
+    except Exception as e:
+        return json.dumps({"status_code": 0, "body": f"Request error: {e}"})
+
+
 # Tool definitions for function calling
 TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read contents of a file from the project repository. Use this to examine wiki files and find answers.",
+            "description": (
+                "Read the full contents of a file from the project repository. "
+                "Use for: wiki documentation, source code files (*.py), "
+                "Dockerfile, docker-compose.yml, requirements files. "
+                "Always read the relevant source file when asked about code behaviour or bugs."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Relative path from project root (e.g., 'wiki/git-workflow.md')",
+                        "description": "Relative path from project root (e.g., 'wiki/git-workflow.md' or 'backend/main.py')",
                     }
                 },
                 "required": ["path"],
@@ -103,33 +143,130 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_files",
-            "description": "List files and directories at a given path. Use this first to discover what wiki files are available.",
+            "description": (
+                "List files and subdirectories at a given path in the project. "
+                "Use this to discover what wiki files, source modules, or router files are available. "
+                "Router modules are at 'backend/app/routers' (not 'backend/routers'). "
+                "Good starting points: 'wiki', 'backend/app', 'backend/app/routers'."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Relative directory path from project root (e.g., 'wiki')",
+                        "description": "Relative directory path from project root (e.g., 'wiki' or 'backend/routers')",
                     }
                 },
                 "required": ["path"],
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_api",
+            "description": (
+                "Send an HTTP request to the deployed backend API and return the response. "
+                "Use for: checking live data (item counts, scores), discovering HTTP status codes, "
+                "reproducing API errors before reading source code to diagnose bugs. "
+                "Always use this tool (not read_file) when the question asks what the API returns, "
+                "how many records exist, or what error a specific endpoint produces."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "method": {
+                        "type": "string",
+                        "description": "HTTP method: GET, POST, PUT, DELETE, PATCH",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "API path including query string if needed (e.g., '/items/' or '/analytics/completion-rate?lab=lab-99')",
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Optional JSON request body as a string",
+                    },
+                },
+                "required": ["method", "path"],
+            },
+        },
+    },
 ]
 
-SYSTEM_PROMPT = """You are a documentation assistant with access to the project wiki files.
-You have two tools:
-- list_files: Discover what files are in a directory
-- read_file: Read the contents of a file
+SYSTEM_PROMPT = """You are a software engineering assistant that can inspect a project's wiki, \
+source code, and live backend API to answer questions accurately.
 
-Follow this process:
-1. First, use list_files on the 'wiki' directory to see what documentation is available
-2. Then use read_file on relevant files to find the answer
-3. Always include the source reference (file path and section if applicable)
-4. When you have the answer, respond with the answer and source
+PROJECT STRUCTURE (use these exact paths):
+- Wiki docs:        wiki/
+- Backend source:   backend/app/
+- Router modules:   backend/app/routers/
+- Main entry point: backend/app/main.py
+- Requirements:     backend/requirements.txt
 
-Remember to explore systematically and cite your sources."""
+KNOWN ROUTER MODULES in backend/app/routers/:
+- items.py        -> handles items (learning content / catalog)
+- interactions.py -> handles user interactions with items
+- analytics.py    -> handles analytics and statistics
+- pipeline.py     -> handles ETL data pipeline
+- learners.py     -> handles learner / user management
+
+TOOLS:
+
+1. list_files(path)
+   - Use to discover files. For routers: path = "backend/app/routers".
+   - For wiki: path = "wiki".
+
+2. read_file(path)
+   - Read any file: wiki, Python source, Dockerfile, docker-compose.yml.
+   - For bugs: first query_api to reproduce, then read_file to find the line.
+
+3. query_api(method, path, body?)
+   - Query the live backend. Use for counts, status codes, live errors.
+   - Put query params in the path: e.g. "/analytics/completion-rate?lab=lab-99".
+
+DECISION GUIDE:
+- "How many items in the database?" -> query_api GET /items/
+- "Status code without auth?" -> query_api GET /items/ without key
+- "What framework?" -> read_file backend/app/main.py or backend/requirements.txt
+- "List router modules and domains?" -> list_files "backend/app/routers", then answer using the known list above
+- "Bug in /analytics/...?" -> query_api first, then read_file the router source
+
+IMPORTANT: always end your answer with:
+Source: <path>   (e.g. Source: wiki/github.md  or  Source: backend/app/routers/items.py  or  Source: api)"""
+
+
+def extract_source(answer: str, all_tool_calls: list) -> str:
+    """
+    Extract the source reference from the answer or tool calls.
+    Priority:
+      1. Explicit 'Source: <path>' line in the answer
+      2. Any file path found in the answer text
+      3. The path argument of the last read_file call
+      4. 'api' if query_api was used
+      5. Empty string
+    """
+    # 1. Explicit Source line
+    match = re.search(r"[Ss]ource:\s*(\S+)", answer)
+    if match:
+        return match.group(1)
+
+    # 2. File path pattern in answer text
+    match = re.search(r"((?:wiki|backend|plans|tests)/[\w./\-]+\.[\w]+)", answer)
+    if match:
+        return match.group(1)
+
+    # 3. Last read_file call path
+    read_calls = [tc for tc in all_tool_calls if tc["tool"] == "read_file"]
+    if read_calls:
+        return read_calls[-1]["args"].get("path", "")
+
+    # 4. query_api was used
+    api_calls = [tc for tc in all_tool_calls if tc["tool"] == "query_api"]
+    if api_calls:
+        return "api"
+
+    return ""
 
 
 def call_llm(messages, tools=None):
@@ -138,9 +275,12 @@ def call_llm(messages, tools=None):
     api_base = os.getenv("LLM_API_BASE")
     model = os.getenv("LLM_MODEL")
 
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
 
-    payload = {"model": model, "messages": messages, "temperature": 0.7}
+    payload = {"model": model, "messages": messages, "temperature": 0.2}
 
     if tools:
         payload["tools"] = tools
@@ -159,8 +299,8 @@ def call_llm(messages, tools=None):
 
 def execute_tool_call(tool_call):
     """Execute a tool call and return result."""
-    function_name = tool_call.function.name
-    arguments = json.loads(tool_call.function.arguments)
+    function_name = tool_call["function"]["name"]
+    arguments = json.loads(tool_call["function"]["arguments"])
 
     debug_log(f"Executing {function_name} with args: {arguments}")
 
@@ -168,11 +308,17 @@ def execute_tool_call(tool_call):
         result = read_file(arguments["path"])
     elif function_name == "list_files":
         result = list_files(arguments["path"])
+    elif function_name == "query_api":
+        result = query_api(
+            method=arguments["method"],
+            path=arguments["path"],
+            body=arguments.get("body"),
+        )
     else:
         result = f"Error: Unknown tool {function_name}"
 
     return {
-        "tool_call_id": tool_call.id,
+        "tool_call_id": tool_call["id"],
         "role": "tool",
         "name": function_name,
         "content": result,
@@ -192,36 +338,23 @@ def agent_loop(question):
     while tool_call_count < MAX_TOOL_CALLS:
         debug_log(f"\n--- Loop iteration {tool_call_count + 1} ---")
 
-        # Call LLM with tools
         response = call_llm(messages, TOOLS)
         assistant_message = response["choices"][0]["message"]
 
-        # Check if there are tool calls
-        if "tool_calls" not in assistant_message or not assistant_message["tool_calls"]:
-            # No tool calls - this is the final answer
-            answer = assistant_message.get("content", "")
+        tool_calls = assistant_message.get("tool_calls")
 
-            # Try to extract source from answer (simple heuristic)
-            source = None
-            if "wiki/" in answer:
-                import re
+        if not tool_calls:
+            # Final answer
+            answer = (assistant_message.get("content") or "").strip()
+            source = extract_source(answer, all_tool_calls)
 
-                match = re.search(r"(wiki/[^\s#]+(?:#[^\s]+)?)", answer)
-                if match:
-                    source = match.group(1)
-
-            # Add assistant message to history
             messages.append({"role": "assistant", "content": answer})
 
             return {
                 "answer": answer,
-                "source": source or "",
+                "source": source,
                 "tool_calls": all_tool_calls,
             }
-
-        # Handle tool calls
-        tool_calls = assistant_message["tool_calls"]
-        debug_log(f"Tool calls requested: {len(tool_calls)}")
 
         # Add assistant message with tool calls to history
         messages.append(assistant_message)
@@ -231,11 +364,10 @@ def agent_loop(question):
             tool_result = execute_tool_call(tool_call)
             messages.append(tool_result)
 
-            # Record for output
             all_tool_calls.append(
                 {
                     "tool": tool_result["name"],
-                    "args": json.loads(tool_call.function.arguments),
+                    "args": json.loads(tool_call["function"]["arguments"]),
                     "result": tool_result["content"],
                 }
             )
@@ -244,12 +376,13 @@ def agent_loop(question):
 
         if tool_call_count >= MAX_TOOL_CALLS:
             debug_log(f"Reached maximum tool calls ({MAX_TOOL_CALLS})")
-            # Get final response
             final_response = call_llm(messages)
-            answer = final_response["choices"][0]["message"].get(
-                "content", "Maximum tool calls reached"
+            answer = (
+                final_response["choices"][0]["message"].get("content")
+                or "Maximum tool calls reached"
             )
-            return {"answer": answer, "source": "", "tool_calls": all_tool_calls}
+            source = extract_source(answer, all_tool_calls)
+            return {"answer": answer, "source": source, "tool_calls": all_tool_calls}
 
     return {
         "answer": "Maximum iterations reached without final answer",
@@ -260,41 +393,23 @@ def agent_loop(question):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Ask a question to the documentation agent"
+        description="Ask a question to the documentation and system agent"
     )
     parser.add_argument("question", type=str, help="The question to ask")
     args = parser.parse_args()
 
-    # Validate environment
-    api_key = os.getenv("LLM_API_KEY")
-    api_base = os.getenv("LLM_API_BASE")
-    model = os.getenv("LLM_MODEL")
-
-    if not all([api_key, api_base, model]):
-        debug_log("Error: Missing required environment variables")
+    # Validate required LLM environment variables
+    if not all(
+        [os.getenv("LLM_API_KEY"), os.getenv("LLM_API_BASE"), os.getenv("LLM_MODEL")]
+    ):
+        debug_log(
+            "Error: Missing required LLM environment variables (LLM_API_KEY, LLM_API_BASE, LLM_MODEL)"
+        )
         sys.exit(1)
-
-    # Create wiki directory if it doesn't exist (for testing)
-    wiki_dir = os.path.join(PROJECT_ROOT, "wiki")
-    if not os.path.exists(wiki_dir):
-        os.makedirs(wiki_dir)
-        # Create sample wiki file for testing
-        sample_file = os.path.join(wiki_dir, "git-workflow.md")
-        if not os.path.exists(sample_file):
-            with open(sample_file, "w") as f:
-                f.write("""# Git Workflow
-
-## Resolving Merge Conflicts
-To resolve a merge conflict:
-1. Edit the conflicting file
-2. Choose which changes to keep
-3. Stage the file: git add <file>
-4. Commit: git commit
-""")
 
     try:
         result = agent_loop(args.question)
-        print(json.dumps(result))
+        print(json.dumps(result, ensure_ascii=False))
     except Exception as e:
         debug_log(f"Error: {e}")
         sys.exit(1)

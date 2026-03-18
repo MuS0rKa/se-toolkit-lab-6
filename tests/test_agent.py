@@ -175,10 +175,97 @@ def test_path_traversal_security():
     print("⚠ No path traversal attempt detected")
 
 
+# ---------------------------------------------------------------------------
+# Task 3 regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_framework_uses_read_file():
+    """
+    Task 3: Asking about the backend framework must trigger read_file,
+    not query_api — the answer lives in source code, not the live API.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            "agent.py",
+            "What Python web framework does this project's backend use?",
+        ],
+        capture_output=True,
+        text=True,
+        env=os.environ.copy(),
+        timeout=120,
+    )
+
+    assert result.returncode == 0, (
+        f"Agent exited with code {result.returncode}\nstderr: {result.stderr}"
+    )
+
+    try:
+        output = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        assert False, f"Output is not valid JSON: {result.stdout}"
+
+    used_tools = [tc.get("tool") for tc in output.get("tool_calls", [])]
+    assert "read_file" in used_tools, (
+        f"Expected 'read_file' in tool_calls, got: {used_tools}\n"
+        f"Answer: {output.get('answer')}"
+    )
+
+    assert "fastapi" in output.get("answer", "").lower(), (
+        f"Expected 'FastAPI' in answer, got: {output.get('answer')}"
+    )
+
+    print("✓ framework → read_file test passed")
+
+
+def test_item_count_uses_query_api():
+    """
+    Task 3: Asking for the current item count must trigger query_api —
+    the answer depends on live database state, not static files.
+    """
+    import re
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "agent.py",
+            "How many items are currently stored in the database?",
+        ],
+        capture_output=True,
+        text=True,
+        env=os.environ.copy(),
+        timeout=120,
+    )
+
+    assert result.returncode == 0, (
+        f"Agent exited with code {result.returncode}\nstderr: {result.stderr}"
+    )
+
+    try:
+        output = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        assert False, f"Output is not valid JSON: {result.stdout}"
+
+    used_tools = [tc.get("tool") for tc in output.get("tool_calls", [])]
+    assert "query_api" in used_tools, (
+        f"Expected 'query_api' in tool_calls, got: {used_tools}\n"
+        f"Answer: {output.get('answer')}"
+    )
+
+    assert re.search(r"\d+", output.get("answer", "")), (
+        f"Expected a number in the answer, got: {output.get('answer')}"
+    )
+
+    print("✓ item count → query_api test passed")
+
+
 if __name__ == "__main__":
     test_agent_basic_question()
     test_agent_list_files_tool()
     test_agent_read_file_tool()
     test_agent_missing_question()
     test_path_traversal_security()
+    test_framework_uses_read_file()
+    test_item_count_uses_query_api()
     print("\n✅ All tests passed!")
