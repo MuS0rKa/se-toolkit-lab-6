@@ -288,7 +288,7 @@ def call_llm(messages, tools=None):
 
     try:
         response = requests.post(
-            f"{api_base}/chat/completions", headers=headers, json=payload, timeout=60
+            f"{api_base.rstrip("/")}/chat/completions", headers=headers, json=payload, timeout=60
         )
         response.raise_for_status()
         return response.json()
