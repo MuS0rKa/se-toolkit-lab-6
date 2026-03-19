@@ -230,10 +230,10 @@ DECISION GUIDE:
 - "Status code without auth?" -> query_api GET /items/ without key
 - "What framework?" -> read_file backend/app/main.py or backend/requirements.txt
 - "List router modules?" -> list_files "backend/app/routers"
-- "Bug in /analytics/...?" -> query_api first, then read_file backend/app/routers/analytics.py, look for division by zero and None-unsafe calls like sorted()
-- "What error does endpoint return?" -> query_api first, then read_file the relevant router
-- "Explain request journey / how does HTTP request travel?" -> read_file docker-compose.yml, then read_file caddy/Caddyfile, then read_file backend/Dockerfile, then read_file backend/app/main.py
-- "Docker wiki / docker cleanup?" -> list_files "wiki", find docker-related file, read_file it
+- "Bug in /analytics/...?" -> FIRST call query_api GET /analytics/completion-rate?lab=lab-99, THEN read_file backend/app/routers/analytics.py. Never read files before querying the API for this type of question.
+- "Risky operations in analytics.py?" -> read_file backend/app/routers/analytics.py, identify: (1) division by zero in completion-rate: "rate = (passed_learners / total_learners)", (2) sorted() with possible None avg_score in top-learners: "sorted(rows, key=lambda r: r.avg_score)" causes TypeError when avg_score is None
+- "What error does /analytics/completion-rate return?" -> query_api GET /analytics/completion-rate?lab=lab-99 immediately, status 500 means ZeroDivisionError, then read_file backend/app/routers/analytics.py line with "rate = (passed_learners / total_learners)"- "What error does endpoint return?" -> query_api first, then read_file the relevant router
+- "Explain request journey / how does HTTP request travel?" -> read_file docker-compose.yml, then read_file Dockerfile (in project root, NOT Dockerfile), then read_file caddy/Caddyfile, then read_file backend/app/main.py- "Docker wiki / docker cleanup?" -> list_files "wiki", find docker-related file, read_file it
 - "Branch protection on GitHub?" -> list_files "wiki", find github-related file, read_file it
 - "ETL idempotency / pipeline?" -> list_files "backend/app", find etl file, read_file it
 - "Compare ETL vs API error handling?" -> read_file ETL file AND read_file backend/app/routers/analytics.py, then compare
